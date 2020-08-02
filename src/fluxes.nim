@@ -11,7 +11,7 @@ from sugar import `=>`
 type
   Flux*[T] = ref object
     next: proc(): Future[Option[T]]
-    cancel*: proc()
+    cancel*: proc() {.gcsafe.} 
 
 proc newFlux*[T](s: openArray[T]): Flux[T] =
   ## Create a new ``Flux`` based on an sequence
@@ -65,12 +65,12 @@ proc newFlux*(af: AsyncFile, bufferSize: int): Flux[string] =
   ## Create a new ``Flux`` based on an ``AsyncFile``
   runnableExamples:
     import asyncfile
+    import asyncdispatch
+    from sugar import `=>`
     writeFile("/tmp/flux.txt","Hello World\n")
     let flux = newFlux(openAsync("/tmp/flux.txt"),bufferSize = 8)
-    var buffer = ""
-    for y in flux.items():
-      buffer = buffer & y
-    assert buffer == "Hello World\n"
+    let content = waitFor flux.foldr((s: string,t: string) => s & t,"")
+    assert content == "Hello World\n"
 
   new(result)
   result.next = proc() : Future[Option[string]] = 
@@ -94,6 +94,7 @@ proc newFlux*(ass: AsyncSocket, bufferSize = 1024): Flux[string] =
   runnableExamples:
     import asyncdispatch
     import asyncnet
+    from sugar import `=>`
     proc serve() {.async.} =
       var server = newAsyncSocket()
       server.setSockOpt(OptReuseAddr, true)
@@ -104,15 +105,10 @@ proc newFlux*(ass: AsyncSocket, bufferSize = 1024): Flux[string] =
       c.close()
       server.close()
 
-    proc client(): Future[Flux[string]]  {.async.} =
-      return newFlux(await asyncnet.dial("localhost",Port(14365)))
-
     asyncCheck serve()
-    let flux = waitFor(client())
-    var buffer = ""
-    for token in flux.items():
-      buffer = buffer & token
-    assert buffer == "Hello World\n"
+    let flux = newFlux(waitFor asyncnet.dial("localhost",Port(14365)))
+    let content = waitFor flux.foldr((s: string,t: string) => s & t,"")
+    assert content == "Hello World\n"
 
   new(result)
   result.next = proc() : Future[Option[string]] = 
@@ -138,9 +134,10 @@ proc map*[T,S](f: Flux[T], op: proc(t: T): S {.gcsafe.}): Flux[S] =
   ##
   runnableExamples:
     import asyncdispatch
+    from sugar import `=>`
     let
-      a = @[1, 2, 3, 4]
-      b = waitFor(newFlux(a).map(proc(x: int): string = $x).toSeqFuture())
+      f = newFlux(@[1, 2, 3, 4])
+      b = f.map((x: int) => $x).toSeq()
     assert b == @["1", "2", "3", "4"]
   
   new(result)
@@ -186,7 +183,7 @@ proc concat*[T](fluxes: varargs[Flux[T]]): Flux[T] =
       f2 = newFlux(@[4, 5])
       f3 = newFlux(@[6, 7])
       total = concat(f1, f2, f3)
-    assert (waitFor total.toSeqFuture()) == @[1, 2, 3, 4, 5, 6, 7]
+    assert total.toSeq() == @[1, 2, 3, 4, 5, 6, 7]
   new(result)
   var index :ref int = new int
   var fl = newSeqOfCap[Flux[T]](fluxes.len)
@@ -202,7 +199,7 @@ proc concat*[T](fluxes: varargs[Flux[T]]): Flux[T] =
        index[].inc
 
 proc foldr*[T,A](f: Flux[T], accumulator: proc(a: A, t: T): A, initial: A): Future[A] {.async.}=
-  ## Reduce the values from this Flux into a single object matching the type of a seed value.
+  ## Fold a flux from left to right, returning the accumulation.
   runnableExamples:
     import asyncdispatch
     from sugar import `=>`
@@ -227,13 +224,104 @@ proc count*[T](f: Flux[T], x : T): Future[int] =
     assert (waitFor f.count(2)) == 4
   return foldr(f,(a: int,t: T) => (if t == x: a + 1 else: a), 0)
 
-proc toSeqFuture*[T](f: Flux[T]): Future[seq[T]] {.async.} =
+
+proc filterNextRead[T](f: Flux[T], future: Future[Option[T]], pred: proc (x: T): bool {.gcsafe.}) =
+    let next = f.next()
+    next.addCallback(proc() {.gcsafe.} =
+      if next.failed:
+        future.fail(next.readError())
+      else:
+        try:
+          let o = next.read()
+          if o.isSome():
+            if pred(o.get()):
+              future.complete(o)
+            else:
+              filterNextRead(f,future,pred)
+          else:
+            future.complete(o)
+        except:
+          future.fail(getCurrentException())
+    )
+
+proc filter*[T](f: Flux[T]; pred: proc (x: T): bool {.gcsafe.}): Flux[T] =
+  ## Returns a new flux with all the items of `f` that fulfilled the
+  ## predicate `pred` (function that returns a `bool`).
+  ##
+  runnableExamples:
+    from sugar import `=>`
+    let
+      colors = newFlux(@["red", "yellow", "black"])
+      f = filter(colors, (x: string) => x.len < 6).toSeq
+    assert f == @["red", "black"]
+
+  new(result)
+  result.next = proc() : Future[Option[T]] = 
+    let future = newFuture[Option[T]]()
+    filterNextRead(f,future,pred)
+    return future
+  result.cancel = f.cancel
+
+
+proc zip*[S,T](f1: Flux[S],f2: Flux[T]): Flux[(S,T)]=
+  ## Returns a new flux with a combination of the two input fluxes.
+  ##
+  ## The input fluxes can be of different types.
+  ## If one flux is shorter, the remaining items in the longer flux
+  ## are discarded.
+  ##
+  runnableExamples:
+    import asyncdispatch
+    let
+      short1 = newFlux(@[1, 2, 3])
+      long = newFlux(@[6, 5, 4, 3, 2, 1])
+      zip1 = zip(short1, long).toSeq()
+    assert zip1 == @[(1, 6), (2, 5), (3, 4)]
+ 
+    let  
+      short2 = newFlux(@[1, 2, 3])
+      words = newFlux(@["one", "two", "three"])
+      zip2 = zip(short2, words).toSeq()
+    assert zip2 == @[(1, "one"), (2, "two"), (3, "three")]
+
+  new(result)
+  result.next = proc() : Future[Option[(S,T)]] = 
+    let future = newFuture[Option[(S,T)]]()
+    let n1: Future[Option[S]] = f1.next()
+    let n2: Future[Option[T]] = f2.next()
+    (n1 and n2).addCallback(proc() {.gcsafe.} =
+      if n1.failed:
+        future.fail(n1.readError())
+      elif n2.failed:
+        future.fail(n2.readError())
+      else:
+        try:
+          let o1 = n1.read()
+          let o2 = n2.read()
+          if o1.isSome() and o2.isSome():
+            future.complete(some((o1.get(),o2.get())))
+          else:
+            if o1.isNone() and o2.isNone():
+              discard
+            elif o1.isNone():
+              f2.cancel()
+            else:
+              f1.cancel()
+            future.complete(none((S,T)))
+        except:
+          future.fail(getCurrentException())
+    )
+    return future
+  result.cancel = () => f1.cancel(); f2.cancel()
+
+
+proc toSeqFutureImpl[T](f: Flux[T]): Future[seq[T]] {.async.} =
   ## Convert a `Flux` to a `seq`
   runnableExamples:
     import asyncdispatch
     let
       f = newFlux(@[3, 2, 1])
-    assert (waitFor toSeqFuture(f)) == @[3, 2, 1]
+    assert f.toSeq() == @[3, 2, 1]
   var a = newSeq[T]()
   while true:
     let next = await f.next()
@@ -241,6 +329,14 @@ proc toSeqFuture*[T](f: Flux[T]): Future[seq[T]] {.async.} =
       a.add(next.get())
     else:
       return a
+
+converter toSeqFuture*[T](f: Flux[T]): Future[seq[T]] =
+  ## Convert a flux to a sequence Future
+  f.toSeqFutureImpl()
+
+converter toSeq*[T](f: Flux[T]): seq[T] =
+  ## Convert a flux to a sequence
+  waitFor f.toSeqFutureImpl()
 
 iterator items*[T](f: Flux[T]):T {.closure.} =
     while true:
