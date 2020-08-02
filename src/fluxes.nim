@@ -345,3 +345,15 @@ iterator items*[T](f: Flux[T]):T {.closure.} =
         yield x.get()
       else:
         break
+
+
+proc readAll*(f: Flux[string]): owned(Future[string]) {.async.} =
+  ## Returns a future that will complete when all the string data from the
+  ## specified flux is retrieved.
+  result = ""
+  while true:
+    let value = await f.next()
+    if value.isSome():
+      result.add(value.get())
+    else:
+      break
