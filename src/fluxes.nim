@@ -2,6 +2,8 @@ import asyncdispatch
 import options
 import asyncfile
 import asyncnet
+import sets
+from sequtils import repeat
 from sugar import `=>`
 
 ## This module implements asynchronous streams.
@@ -127,6 +129,82 @@ proc newFlux*(ass: AsyncSocket, bufferSize = 1024): Flux[string] =
     return f
   result.cancel = proc() = ass.close()
 
+proc repeat*[T](x: T, n: Natural): Flux[T] =
+  ## Returns a new flux with the item `x` repeated `n` times.
+  ## `n` must be a non-negative number (zero or more).
+  ##
+  runnableExamples:
+    let
+      total = repeat(5, 3)
+    assert total.toSeq() == @[5, 5, 5]
+  
+  result = newFlux(sequtils.repeat(x,n))
+
+proc deduplicate*[T](f: Flux[T], isSorted: bool = false): Flux[T] =
+  ## Returns a new sequence without duplicates.
+  ##
+  ## Setting the optional argument ``isSorted`` to ``true`` (default: false)
+  ## uses a faster algorithm for deduplication.
+  ##
+  runnableExamples:
+    let
+      dup1 = newFlux(@[1, 1, 3, 4, 2, 2, 8, 1, 4])
+      dup2 = newFlux(@["a", "a", "c", "d", "d"])
+      unique1 = deduplicate(dup1)
+      unique2 = deduplicate(dup2, isSorted = true)
+    assert unique1.toSeq() == @[1, 3, 4, 2, 8]
+    assert unique2.toSeq() == @["a", "c", "d"]
+
+  new(result)
+  if isSorted:
+    var prev :ref Option[T] = new Option[T]
+    proc readNext[T](f: Flux[T], future: Future[Option[T]]) =
+        let next = f.next()
+        next.addCallback(proc() {.gcsafe.} =
+          if next.failed:
+            future.fail(next.readError())
+          else:
+            try:
+              let o = next.read()
+              if o == prev[]:
+                readNext(f,future)
+              else:
+                future.complete(o)
+                prev[] = o
+            except:
+              future.fail(getCurrentException())
+        )
+    result.next = proc() : Future[Option[T]] = 
+      result = newFuture[Option[T]]()
+      readNext(f,result)
+  else:
+    var seen :HashSet[T]
+    init(seen)
+    proc readNext[T](f: Flux[T], future: Future[Option[T]]) =
+        let next = f.next()
+        next.addCallback(proc() {.gcsafe.} =
+          if next.failed:
+            future.fail(next.readError())
+          else:
+            try:
+              let o = next.read()
+              if o.isSome():
+                let t = o.get()
+                if seen.contains(t):
+                  readNext(f,future)
+                else:
+                  future.complete(o)
+                  seen.incl(t)
+              else:
+                future.complete(o)
+            except:
+              future.fail(getCurrentException())
+        )
+    result.next = proc() : Future[Option[T]] = 
+      result = newFuture[Option[T]]()
+      readNext(f,result)
+  result.cancel = f.cancel
+
 
 proc map*[T,S](f: Flux[T], op: proc(t: T): S {.gcsafe.}): Flux[S] =
   ## Returns a new `Flux` with the results of `op` proc applied to every
@@ -157,22 +235,6 @@ proc map*[T,S](f: Flux[T], op: proc(t: T): S {.gcsafe.}): Flux[S] =
   result.cancel = f.cancel
 
 
-proc concatReadNext[T]( index: ref int, fluxes: seq[Flux[T]], future: Future[Option[T]]) =
-  if index[] >= fluxes.len:
-    future.complete(none(T))
-  else:
-    let next: Future[Option[T]] = fluxes[index[]].next()
-    next.addCallback(proc() {.gcsafe.} =
-      if next.failed:
-        future.fail(next.readError())
-      else:
-        let r = next.read()
-        if r.isSome():
-          future.complete(r)
-        else:
-          index[].inc
-          concatReadNext(index,fluxes,future)
-    )
 
 proc concat*[T](fluxes: varargs[Flux[T]]): Flux[T] =
   ## Takes several fluxes' items and returns them inside a new fluxes. All fluxes must be of the same type.
@@ -186,16 +248,32 @@ proc concat*[T](fluxes: varargs[Flux[T]]): Flux[T] =
     assert total.toSeq() == @[1, 2, 3, 4, 5, 6, 7]
   new(result)
   var index :ref int = new int
-  var fl = newSeqOfCap[Flux[T]](fluxes.len)
+  var copiedFluxes = newSeqOfCap[Flux[T]](fluxes.len)
   for f in fluxes:
-    fl.add(f)
+    copiedFluxes.add(f)
+  proc readNext[T](future: Future[Option[T]]) =
+    if index[] >= copiedFluxes.len:
+      future.complete(none(T))
+    else:
+      let next: Future[Option[T]] = copiedFluxes[index[]].next()
+      next.addCallback(proc() {.gcsafe.} =
+        if next.failed:
+          future.fail(next.readError())
+        else:
+          let r = next.read()
+          if r.isSome():
+            future.complete(r)
+          else:
+            index[].inc
+            readNext(future)
+      )
   result.next = proc() : Future[Option[T]] = 
-    let future = newFuture[Option[T]]()
-    concatReadNext(index,fl,future)
-    return future
+    result = newFuture[Option[T]]()
+    readNext(result)
+
   result.cancel = proc() =
-     while index[] < len(fl):
-       fl[index[]].cancel()
+     while index[] < len(copiedFluxes):
+       copiedFluxes[index[]].cancel()
        index[].inc
 
 proc foldr*[T,A](f: Flux[T], accumulator: proc(a: A, t: T): A, initial: A): Future[A] {.async.}=
@@ -225,28 +303,10 @@ proc count*[T](f: Flux[T], x : T): Future[int] =
   return foldr(f,(a: int,t: T) => (if t == x: a + 1 else: a), 0)
 
 
-proc filterNextRead[T](f: Flux[T], future: Future[Option[T]], pred: proc (x: T): bool {.gcsafe.}) =
-    let next = f.next()
-    next.addCallback(proc() {.gcsafe.} =
-      if next.failed:
-        future.fail(next.readError())
-      else:
-        try:
-          let o = next.read()
-          if o.isSome():
-            if pred(o.get()):
-              future.complete(o)
-            else:
-              filterNextRead(f,future,pred)
-          else:
-            future.complete(o)
-        except:
-          future.fail(getCurrentException())
-    )
 
-proc filter*[T](f: Flux[T]; pred: proc (x: T): bool {.gcsafe.}): Flux[T] =
+proc filter*[T](f: Flux[T]; predicate: proc (x: T): bool {.gcsafe.}): Flux[T] =
   ## Returns a new flux with all the items of `f` that fulfilled the
-  ## predicate `pred` (function that returns a `bool`).
+  ## predicate `predicate` (function that returns a `bool`).
   ##
   runnableExamples:
     from sugar import `=>`
@@ -256,9 +316,29 @@ proc filter*[T](f: Flux[T]; pred: proc (x: T): bool {.gcsafe.}): Flux[T] =
     assert f == @["red", "black"]
 
   new(result)
+  let pred = predicate
+  proc readNext[T](f: Flux[T], future: Future[Option[T]]) =
+      let next = f.next()
+      next.addCallback(proc() {.gcsafe.} =
+        if next.failed:
+          future.fail(next.readError())
+        else:
+          try:
+            let o = next.read()
+            if o.isSome():
+              let y: T = o.get
+              if pred(y):
+                future.complete(o)
+              else:
+                readNext(f,future)
+            else:
+              future.complete(o)
+          except:
+            future.fail(getCurrentException())
+      )
   result.next = proc() : Future[Option[T]] = 
     let future = newFuture[Option[T]]()
-    filterNextRead(f,future,pred)
+    readNext(f,future)
     return future
   result.cancel = f.cancel
 

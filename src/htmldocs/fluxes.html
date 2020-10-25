@@ -111,12 +111,17 @@ function main() {
   </ul>
   <ul class="simple nested-toc-section">filter
       <li><a class="reference" href="#filter%2CFlux%5BT%5D%2Cproc%28T%29"
-    title="filter[T](f: Flux[T]; pred: proc (x: T): bool {.gcsafe.}): Flux[T]">filter,Flux[T],proc(T)<span class="attachedType">Flux</span></a></li>
+    title="filter[T](f: Flux[T]; predicate: proc (x: T): bool {.gcsafe.}): Flux[T]">filter,Flux[T],proc(T)<span class="attachedType">Flux</span></a></li>
 
   </ul>
   <ul class="simple nested-toc-section">readAll
       <li><a class="reference" href="#readAll%2CFlux%5Bstring%5D"
     title="readAll(f: Flux[string]): owned(Future[string])">readAll,Flux[string]<span class="attachedType">Flux</span></a></li>
+
+  </ul>
+  <ul class="simple nested-toc-section">repeat
+      <li><a class="reference" href="#repeat%2CT%2CNatural"
+    title="repeat[T](x: T; n: Natural): Flux[T]">repeat,T,Natural<span class="attachedType">Flux</span></a></li>
 
   </ul>
   <ul class="simple nested-toc-section">newFlux
@@ -138,6 +143,11 @@ function main() {
   <ul class="simple nested-toc-section">count
       <li><a class="reference" href="#count%2CFlux%5BT%5D%2CT"
     title="count[T](f: Flux[T]; x: T): Future[int]">count,Flux[T],T<span class="attachedType">Flux</span></a></li>
+
+  </ul>
+  <ul class="simple nested-toc-section">deduplicate
+      <li><a class="reference" href="#deduplicate%2CFlux%5BT%5D%2Cbool"
+    title="deduplicate[T](f: Flux[T]; isSorted: bool = false): Flux[T]">deduplicate,Flux[T],bool<span class="attachedType">Flux</span></a></li>
 
   </ul>
   <ul class="simple nested-toc-section">concat
@@ -271,6 +281,34 @@ Create a new <tt class="docutils literal"><span class="pre">Flux</span></tt> bas
 </span><span class="Identifier">assert</span><span class="Whitespace"> </span><span class="Identifier">content</span><span class="Whitespace"> </span><span class="Operator">==</span><span class="Whitespace"> </span><span class="StringLit">&quot;Hello World</span><span class="EscapeSequence">\n</span><span class="StringLit">&quot;</span></pre>
 
 </dd>
+<a id="repeat,T,Natural"></a>
+<dt><pre><span class="Keyword">proc</span> <a href="#repeat%2CT%2CNatural"><span class="Identifier">repeat</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">]</span><span class="Other">(</span><span class="Identifier">x</span><span class="Other">:</span> <span class="Identifier">T</span><span class="Other">;</span> <span class="Identifier">n</span><span class="Other">:</span> <span class="Identifier">Natural</span><span class="Other">)</span><span class="Other">:</span> <a href="fluxes.html#Flux"><span class="Identifier">Flux</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">]</span></pre></dt>
+<dd>
+
+Returns a new flux with the item <tt class="docutils literal"><span class="pre">x</span></tt> repeated <tt class="docutils literal"><span class="pre">n</span></tt> times. <tt class="docutils literal"><span class="pre">n</span></tt> must be a non-negative number (zero or more). 
+<p><strong class="examples_text">Example:</strong></p>
+<pre class="listing"><span class="Keyword">let</span><span class="Whitespace">
+  </span><span class="Identifier">total</span><span class="Whitespace"> </span><span class="Operator">=</span><span class="Whitespace"> </span><span class="Identifier">repeat</span><span class="Punctuation">(</span><span class="DecNumber">5</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">3</span><span class="Punctuation">)</span><span class="Whitespace">
+</span><span class="Identifier">assert</span><span class="Whitespace"> </span><span class="Identifier">total</span><span class="Operator">.</span><span class="Identifier">toSeq</span><span class="Punctuation">(</span><span class="Punctuation">)</span><span class="Whitespace"> </span><span class="Operator">==</span><span class="Whitespace"> </span><span class="Operator">@</span><span class="Punctuation">[</span><span class="DecNumber">5</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">5</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">5</span><span class="Punctuation">]</span></pre>
+
+</dd>
+<a id="deduplicate,Flux[T],bool"></a>
+<dt><pre><span class="Keyword">proc</span> <a href="#deduplicate%2CFlux%5BT%5D%2Cbool"><span class="Identifier">deduplicate</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">]</span><span class="Other">(</span><span class="Identifier">f</span><span class="Other">:</span> <a href="fluxes.html#Flux"><span class="Identifier">Flux</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">isSorted</span><span class="Other">:</span> <span class="Identifier">bool</span> <span class="Other">=</span> <span class="Identifier">false</span><span class="Other">)</span><span class="Other">:</span> <a href="fluxes.html#Flux"><span class="Identifier">Flux</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">]</span></pre></dt>
+<dd>
+
+<p>Returns a new sequence without duplicates.</p>
+<p>Setting the optional argument <tt class="docutils literal"><span class="pre">isSorted</span></tt> to <tt class="docutils literal"><span class="pre">true</span></tt> (default: false) uses a faster algorithm for deduplication. </p>
+
+<p><strong class="examples_text">Example:</strong></p>
+<pre class="listing"><span class="Keyword">let</span><span class="Whitespace">
+  </span><span class="Identifier">dup1</span><span class="Whitespace"> </span><span class="Operator">=</span><span class="Whitespace"> </span><span class="Identifier">newFlux</span><span class="Punctuation">(</span><span class="Operator">@</span><span class="Punctuation">[</span><span class="DecNumber">1</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">1</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">3</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">4</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">2</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">2</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">8</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">1</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">4</span><span class="Punctuation">]</span><span class="Punctuation">)</span><span class="Whitespace">
+  </span><span class="Identifier">dup2</span><span class="Whitespace"> </span><span class="Operator">=</span><span class="Whitespace"> </span><span class="Identifier">newFlux</span><span class="Punctuation">(</span><span class="Operator">@</span><span class="Punctuation">[</span><span class="StringLit">&quot;a&quot;</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="StringLit">&quot;a&quot;</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="StringLit">&quot;c&quot;</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="StringLit">&quot;d&quot;</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="StringLit">&quot;d&quot;</span><span class="Punctuation">]</span><span class="Punctuation">)</span><span class="Whitespace">
+  </span><span class="Identifier">unique1</span><span class="Whitespace"> </span><span class="Operator">=</span><span class="Whitespace"> </span><span class="Identifier">deduplicate</span><span class="Punctuation">(</span><span class="Identifier">dup1</span><span class="Punctuation">)</span><span class="Whitespace">
+  </span><span class="Identifier">unique2</span><span class="Whitespace"> </span><span class="Operator">=</span><span class="Whitespace"> </span><span class="Identifier">deduplicate</span><span class="Punctuation">(</span><span class="Identifier">dup2</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="Identifier">isSorted</span><span class="Whitespace"> </span><span class="Operator">=</span><span class="Whitespace"> </span><span class="Identifier">true</span><span class="Punctuation">)</span><span class="Whitespace">
+</span><span class="Identifier">assert</span><span class="Whitespace"> </span><span class="Identifier">unique1</span><span class="Operator">.</span><span class="Identifier">toSeq</span><span class="Punctuation">(</span><span class="Punctuation">)</span><span class="Whitespace"> </span><span class="Operator">==</span><span class="Whitespace"> </span><span class="Operator">@</span><span class="Punctuation">[</span><span class="DecNumber">1</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">3</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">4</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">2</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="DecNumber">8</span><span class="Punctuation">]</span><span class="Whitespace">
+</span><span class="Identifier">assert</span><span class="Whitespace"> </span><span class="Identifier">unique2</span><span class="Operator">.</span><span class="Identifier">toSeq</span><span class="Punctuation">(</span><span class="Punctuation">)</span><span class="Whitespace"> </span><span class="Operator">==</span><span class="Whitespace"> </span><span class="Operator">@</span><span class="Punctuation">[</span><span class="StringLit">&quot;a&quot;</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="StringLit">&quot;c&quot;</span><span class="Punctuation">,</span><span class="Whitespace"> </span><span class="StringLit">&quot;d&quot;</span><span class="Punctuation">]</span></pre>
+
+</dd>
 <a id="map,Flux[T],proc(T)"></a>
 <dt><pre><span class="Keyword">proc</span> <a href="#map%2CFlux%5BT%5D%2Cproc%28T%29"><span class="Identifier">map</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">,</span> <span class="Identifier">S</span><span class="Other">]</span><span class="Other">(</span><span class="Identifier">f</span><span class="Other">:</span> <a href="fluxes.html#Flux"><span class="Identifier">Flux</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">op</span><span class="Other">:</span> <span class="Keyword">proc</span> <span class="Other">(</span><span class="Identifier">t</span><span class="Other">:</span> <span class="Identifier">T</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">S</span> <span><span class="Other">{</span><span class="Other pragmadots">...</span><span class="Other">}</span></span><span class="pragmawrap"><span class="Other">{.</span><span class="pragma"><span class="Identifier">gcsafe</span></span><span class="Other">.}</span></span><span class="Other">)</span><span class="Other">:</span> <a href="fluxes.html#Flux"><span class="Identifier">Flux</span></a><span class="Other">[</span><span class="Identifier">S</span><span class="Other">]</span></pre></dt>
 <dd>
@@ -327,10 +365,10 @@ Returns the number of occurrences of the item x in the flux f.
 
 </dd>
 <a id="filter,Flux[T],proc(T)"></a>
-<dt><pre><span class="Keyword">proc</span> <a href="#filter%2CFlux%5BT%5D%2Cproc%28T%29"><span class="Identifier">filter</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">]</span><span class="Other">(</span><span class="Identifier">f</span><span class="Other">:</span> <a href="fluxes.html#Flux"><span class="Identifier">Flux</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">pred</span><span class="Other">:</span> <span class="Keyword">proc</span> <span class="Other">(</span><span class="Identifier">x</span><span class="Other">:</span> <span class="Identifier">T</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">bool</span> <span><span class="Other">{</span><span class="Other pragmadots">...</span><span class="Other">}</span></span><span class="pragmawrap"><span class="Other">{.</span><span class="pragma"><span class="Identifier">gcsafe</span></span><span class="Other">.}</span></span><span class="Other">)</span><span class="Other">:</span> <a href="fluxes.html#Flux"><span class="Identifier">Flux</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">]</span></pre></dt>
+<dt><pre><span class="Keyword">proc</span> <a href="#filter%2CFlux%5BT%5D%2Cproc%28T%29"><span class="Identifier">filter</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">]</span><span class="Other">(</span><span class="Identifier">f</span><span class="Other">:</span> <a href="fluxes.html#Flux"><span class="Identifier">Flux</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">]</span><span class="Other">;</span> <span class="Identifier">predicate</span><span class="Other">:</span> <span class="Keyword">proc</span> <span class="Other">(</span><span class="Identifier">x</span><span class="Other">:</span> <span class="Identifier">T</span><span class="Other">)</span><span class="Other">:</span> <span class="Identifier">bool</span> <span><span class="Other">{</span><span class="Other pragmadots">...</span><span class="Other">}</span></span><span class="pragmawrap"><span class="Other">{.</span><span class="pragma"><span class="Identifier">gcsafe</span></span><span class="Other">.}</span></span><span class="Other">)</span><span class="Other">:</span> <a href="fluxes.html#Flux"><span class="Identifier">Flux</span></a><span class="Other">[</span><span class="Identifier">T</span><span class="Other">]</span></pre></dt>
 <dd>
 
-Returns a new flux with all the items of <tt class="docutils literal"><span class="pre">f</span></tt> that fulfilled the predicate <tt class="docutils literal"><span class="pre">pred</span></tt> (function that returns a <tt class="docutils literal"><span class="pre">bool</span></tt>). 
+Returns a new flux with all the items of <tt class="docutils literal"><span class="pre">f</span></tt> that fulfilled the predicate <tt class="docutils literal"><span class="pre">predicate</span></tt> (function that returns a <tt class="docutils literal"><span class="pre">bool</span></tt>). 
 <p><strong class="examples_text">Example:</strong></p>
 <pre class="listing"><span class="Keyword">from</span><span class="Whitespace"> </span><span class="Identifier">sugar</span><span class="Whitespace"> </span><span class="Keyword">import</span><span class="Whitespace"> </span><span class="Punctuation">`</span><span class="Operator">=&gt;</span><span class="Punctuation">`</span><span class="Whitespace">
 </span><span class="Keyword">let</span><span class="Whitespace">
@@ -410,7 +448,7 @@ Convert a flux to a sequence
       <div class="twelve-columns footer">
         <span class="nim-sprite"></span>
         <br/>
-        <small style="color: var(--hint);">Made with Nim. Generated: 2020-10-25 06:27:42 UTC</small>
+        <small style="color: var(--hint);">Made with Nim. Generated: 2020-10-25 11:09:53 UTC</small>
       </div>
     </div>
   </div>
