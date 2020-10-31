@@ -12,8 +12,20 @@ from sugar import `=>`
 
 type
   Flux*[T] = ref object
-    next: proc(): Future[Option[T]] {.gcsafe.}
-    cancel*: proc() {.gcsafe.} 
+    nextImpl: proc(future: Future[Option[T]])  {.gcsafe.}
+    cancelImpl: proc() {.gcsafe.}
+    future: FutureVar[Option[T]]
+
+
+proc next*[T](f: Flux[T]): Future[Option[T]] = 
+  f.future.clean()
+  result = Future[Option[T]](f.future)
+  f.nextImpl(result)
+
+proc cancel*[T](f: Flux[T]) = 
+  f.cancelImpl()
+
+proc newFlux[T](): Flux[T] = Flux[T](future: newFutureVar[Option[T]]())
 
 proc newFlux*[T](s: openArray[T]): Flux[T] =
   ## Create a new ``Flux`` based on an sequence
@@ -27,17 +39,15 @@ proc newFlux*[T](s: openArray[T]): Flux[T] =
   var a = newSeq[T](s.len)
   for i, t in s:
     a[i] = t
-  new(result)
+  result = newFlux[T]()
   var i = 0
-  result.next = proc() : Future[Option[T]] = 
-    let f = newFuture[Option[T]]()
+  result.nextImpl = proc(f: Future[Option[T]]) =
     if i >= a.len:
       f.complete(none[T]())
     else:  
       f.complete(some(a[i]))
       i += 1
-    return f
-  result.cancel = proc() = discard
+  result.cancelImpl = proc() = discard
 
 proc newFlux*[T](it: iterator(): T {.gcsafe.}): Flux[T] =
   ## Create a new ``Flux`` based on an iterator
@@ -52,16 +62,14 @@ proc newFlux*[T](it: iterator(): T {.gcsafe.}): Flux[T] =
       assert y == x
       x += 1
 
-  new(result)
-  result.next = proc() : Future[Option[T]]= 
-    let f = newFuture[Option[T]]()
+  result = newFlux[T]()
+  result.nextImpl = proc(f: Future[Option[T]]) =
     let x = it()
     if finished(it):
       f.complete(none[T]())
     else:  
       f.complete(some(x))
-    return f
-  result.cancel = proc() = discard
+  result.cancelImpl = proc() = discard
 
 proc newFlux*(af: AsyncFile, bufferSize: int): Flux[string] =
   ## Create a new ``Flux`` based on an ``AsyncFile``
@@ -74,9 +82,8 @@ proc newFlux*(af: AsyncFile, bufferSize: int): Flux[string] =
     let content = waitFor flux.foldr((s: string,t: string) => s & t,"")
     assert content == "Hello World\n"
 
-  new(result)
-  result.next = proc() : Future[Option[string]] = 
-    let f = newFuture[Option[string]]()
+  result = newFlux[string]()
+  result.nextImpl = proc(f: Future[Option[string]]) =
     let x = af.read(bufferSize)
     x.callback = proc() =
       if x.failed:
@@ -88,8 +95,7 @@ proc newFlux*(af: AsyncFile, bufferSize: int): Flux[string] =
           af.close()
         else:
           f.complete(some(s))
-    return f
-  result.cancel = proc() = af.close()
+  result.cancelImpl = proc() = af.close()
 
 proc newFlux*(ass: AsyncSocket, bufferSize = 1024): Flux[string] =
   ## Create a new ``Flux`` based on an ``AsyncSocket``
@@ -112,9 +118,8 @@ proc newFlux*(ass: AsyncSocket, bufferSize = 1024): Flux[string] =
     let content = waitFor flux.foldr((s: string,t: string) => s & t,"")
     assert content == "Hello World\n"
 
-  new(result)
-  result.next = proc() : Future[Option[string]] = 
-    let f = newFuture[Option[string]]()
+  result = newFlux[string]()
+  result.nextImpl = proc(f: Future[Option[string]]) =
     let x = ass.recv(bufferSize)
     x.callback = proc() =
       if x.failed:
@@ -126,8 +131,7 @@ proc newFlux*(ass: AsyncSocket, bufferSize = 1024): Flux[string] =
           ass.close()
         else:
           f.complete(some(s))
-    return f
-  result.cancel = proc() = ass.close()
+  result.cancelImpl = proc() = ass.close()
 
 proc repeat*[T](x: T, n: Natural): Flux[T] =
   ## Returns a new flux with the item `x` repeated `n` times.
@@ -155,7 +159,7 @@ proc deduplicate*[T](f: Flux[T], isSorted: bool = false): Flux[T] =
     assert unique1.toSeq() == @[1, 3, 4, 2, 8]
     assert unique2.toSeq() == @["a", "c", "d"]
 
-  new(result)
+  result = newFlux[T]()
   if isSorted:
     var prev :ref Option[T] = new Option[T]
     proc readNext[T](f: Flux[T], future: Future[Option[T]]) =
@@ -174,9 +178,8 @@ proc deduplicate*[T](f: Flux[T], isSorted: bool = false): Flux[T] =
             except:
               future.fail(getCurrentException())
         )
-    result.next = proc() : Future[Option[T]] = 
-      result = newFuture[Option[T]]()
-      readNext(f,result)
+    result.nextImpl = proc(future: Future[Option[T]]) =
+      readNext(f,future)
   else:
     var seen :HashSet[T]
     init(seen)
@@ -200,10 +203,9 @@ proc deduplicate*[T](f: Flux[T], isSorted: bool = false): Flux[T] =
             except:
               future.fail(getCurrentException())
         )
-    result.next = proc() : Future[Option[T]] = 
-      result = newFuture[Option[T]]()
-      readNext(f,result)
-  result.cancel = f.cancel
+    result.nextImpl = proc(future: Future[Option[T]]) =
+      readNext(f,future)
+  result.cancelImpl = f.cancelImpl
 
 
 proc map*[T,S](f: Flux[T], op: proc(t: T): S {.gcsafe.}): Flux[S] =
@@ -218,9 +220,8 @@ proc map*[T,S](f: Flux[T], op: proc(t: T): S {.gcsafe.}): Flux[S] =
       b = f.map((x: int) => $x).toSeq()
     assert b == @["1", "2", "3", "4"]
   
-  new(result)
-  result.next = proc() : Future[Option[S]] = 
-    let future = newFuture[Option[S]]()
+  result = newFlux[S]()
+  result.nextImpl = proc(future: Future[Option[S]]) =
     let next: Future[Option[T]] = f.next()
     next.addCallback(proc() =
       if next.failed:
@@ -231,8 +232,7 @@ proc map*[T,S](f: Flux[T], op: proc(t: T): S {.gcsafe.}): Flux[S] =
         except:
           future.fail(getCurrentException())
     )
-    return future
-  result.cancel = f.cancel
+  result.cancelImpl = f.cancelImpl
 
 
 
@@ -246,7 +246,7 @@ proc concat*[T](fluxes: varargs[Flux[T]]): Flux[T] =
       f3 = newFlux(@[6, 7])
       total = concat(f1, f2, f3)
     assert total.toSeq() == @[1, 2, 3, 4, 5, 6, 7]
-  new(result)
+  result = newFlux[T]()
   var index :ref int = new int
   var copiedFluxes = newSeqOfCap[Flux[T]](fluxes.len)
   for f in fluxes:
@@ -267,11 +267,10 @@ proc concat*[T](fluxes: varargs[Flux[T]]): Flux[T] =
             index[].inc
             readNext(future)
       )
-  result.next = proc() : Future[Option[T]] = 
-    result = newFuture[Option[T]]()
-    readNext(result)
+  result.nextImpl = proc(future: Future[Option[T]]) =
+    readNext(future)
 
-  result.cancel = proc() =
+  result.cancelImpl = proc() =
      while index[] < len(copiedFluxes):
        copiedFluxes[index[]].cancel()
        index[].inc
@@ -315,7 +314,7 @@ proc filter*[T](f: Flux[T]; pred: proc (x: T): bool  {.gcsafe.}): Flux[T] =
       f = filter(colors, (x: string) => x.len < 6).toSeq
     assert f == @["red", "black"]
 
-  new(result)
+  result = newFlux[T]()
   let predicate = pred
   proc readNext[T](f: Flux[T], future: Future[Option[T]]) =
     let next = f.next()
@@ -336,11 +335,9 @@ proc filter*[T](f: Flux[T]; pred: proc (x: T): bool  {.gcsafe.}): Flux[T] =
         except:
           future.fail(getCurrentException())
     )
-  result.next = proc() : Future[Option[T]] = 
-    let future = newFuture[Option[T]]()
+  result.nextImpl = proc(future: Future[Option[T]]) =
     readNext(f,future)
-    return future
-  result.cancel = f.cancel
+  result.cancelImpl = f.cancelImpl
 
 
 proc keep*[T](f: Flux[T], pred: proc(x: T): bool {.gcsafe.}): Flux[T] =
@@ -376,9 +373,8 @@ proc zip*[S,T](f1: Flux[S],f2: Flux[T]): Flux[(S,T)]=
       zip2 = zip(short2, words).toSeq()
     assert zip2 == @[(1, "one"), (2, "two"), (3, "three")]
 
-  new(result)
-  result.next = proc() : Future[Option[(S,T)]] = 
-    let future = newFuture[Option[(S,T)]]()
+  result = newFlux[(S,T)]()
+  result.nextImpl = proc(future: Future[Option[(S,T)]]) =
     let n1: Future[Option[S]] = f1.next()
     let n2: Future[Option[T]] = f2.next()
     (n1 and n2).addCallback(proc() =
@@ -403,8 +399,7 @@ proc zip*[S,T](f1: Flux[S],f2: Flux[T]): Flux[(S,T)]=
         except:
           future.fail(getCurrentException())
     )
-    return future
-  result.cancel = () => f1.cancel(); f2.cancel()
+  result.cancelImpl = () => f1.cancelImpl(); f2.cancelImpl()
 
 proc all*[T](f: Flux[T], pred: proc(x: T): bool {.gcsafe.}): Future[bool] =
   ## Iterates through a flux and checks if every item fulfills the
